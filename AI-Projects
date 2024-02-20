@@ -1,1 +1,94 @@
+#if u want it , don't forget to install all necessary and required libraries
 
+import numpy as np
+import tensorflow as tf
+import random
+from tensorflow import keras
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense,Activation #Attention Embedding , Bidirectional
+from tensorflow.keras.optimizers import RMSprop
+
+filepath = tf.keras.utils.get_file('shakespeare.txt',
+                                       'https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt')#an url connect straight to bigData
+
+text = open(filepath, 'rb').read().decode(encoding='utf-8').lower()#we used utf-8 to encoding the code as english language
+text = text[300000:800000]
+
+characters = sorted(set(text))
+char_to_index = dict((c, i) for i, c in enumerate(characters))
+index_to_char = dict((i, c) for i, c in enumerate(characters))
+
+SEQ_LENGTH = 40
+STEP_SIZE = 3
+sentences = []
+next_characters = []
+
+for i in range(0, len(text) - SEQ_LENGTH, STEP_SIZE):# to iterate in each index and generate some words
+    sentences.append(text[i: i + SEQ_LENGTH])
+    next_characters.append(text[i + SEQ_LENGTH])
+
+x = np.zeros((len(sentences), SEQ_LENGTH, len(characters)), dtype=bool) #here we can initialez matrix have size of each word , and each word can hold 40 lenght digit
+y = np.zeros((len(sentences), len(characters)), dtype=bool)
+
+for i, sentence in enumerate(sentences):  # gives index for each sentence
+    for t, character in enumerate(sentence):  # gives index for each character in each sentences , as the pervious
+        x[i, t, char_to_index[character]] = 1  # sentence number at char number something , at posetions convert it to numeric as 1
+    y[i, char_to_index[next_characters[i]]] = 1  # the output
+
+
+
+
+#     # now we building RNN..
+
+# now from here to next # , it a training code , just one time we will call it
+# model = Sequential()#walk motsalsel , step by step
+# model.add(LSTM(128, input_shape=(SEQ_LENGTH, len(characters))))  # to save the input and using it agina untill we got right weights
+# model.add(Dense(len(characters)))#بتنظم عمليات انبوت لل ناودز
+# model.add(Activation('softmax'))  # softmax an ml algo that scales the output untill make it all as 1 , it predict the most letter is right
+# # so if next char like x around 8% , and E is 12% , he will took the E as the suitable letter and fit in the word
+# model.compile(loss='categorical_crossentropy', optimizer=RMSprop(lr=0.01))
+
+# model.fit(x, y, batch_size=256, epochs=20)
+# #
+# model.save('TEXTWITHRNN.model')
+
+
+model = tf.keras.models.load_model('TEXTWITHRNN.model')
+
+def sample(preds, temperature=1.0):  # when the model take text it predict next word based on 'softmax'
+    preds = np.asarray(preds).astype('float64')
+    preds = np.log(preds) / temperature
+    exp_preds = np.exp(preds)
+    preds = exp_preds / np.sum(exp_preds)
+    probas = np.random.multinomial(1, preds, 1)
+    return np.argmax(probas)
+
+def generate_text(lenght , tempreture):#gives input for rnn and predict the output for next layer node
+    start_index=random.randint(0,len(text)-SEQ_LENGTH-1)
+    generated=""
+    sentence=text[start_index: start_index+SEQ_LENGTH]
+    generated+=sentence
+    for i in range(lenght):
+        x=np.zeros((1, SEQ_LENGTH , len(characters)))
+        for t, character in enumerate(sentence):
+            x[0,t,char_to_index[character]]=1
+        predictions=model.predict(x,verbose=0)[0]
+        next_index=sample(predictions,tempreture)
+        next_character=index_to_char[next_index]
+
+        generated+= next_character
+        sentence=sentence[1:]+next_character
+    return generated
+
+
+#the more percentage increase , the more text being sold and valid ..
+print('---0.2----')
+print (generate_text(150, 0.2))
+print('----0.4----')
+print (generate_text (150, 0.4))
+print('➖➖➖➖➖➖➖➖➖0.6➖➖➖➖➖➖➖ ')
+print (generate_text(150, 0.6))
+print(' -0.8:')
+print (generate_text (150, 0.8))
+print('‒‒‒‒‒‒‒‒‒1‒‒‒‒‒‒‒‒‒ ')
+print (generate_text(150, 1.0))
