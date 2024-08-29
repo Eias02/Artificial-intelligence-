@@ -1,0 +1,710 @@
+# 1. Imports and Setup
+# Import necessary libraries for data manipulation, machine learning, image processing, GUI, etc.
+import pandas as pd  # Data manipulation library
+import os  # Operating system interface
+import tensorflow as tf  # Main TensorFlow library for deep learning
+from tensorflow.keras.preprocessing import image  # Image preprocessing utilities
+from tensorflow.keras.preprocessing.image import ImageDataGenerator  # Utility to generate image data with augmentation
+from tensorflow.keras.applications import VGG16  # Pre-trained VGG16 model
+from tensorflow.keras.models import Model, load_model  # Model building and loading utilities
+from tensorflow.keras.layers import Dense, Flatten, BatchNormalization, Dropout  # Layers for model architecture
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau  # Callbacks for training
+from sklearn.preprocessing import LabelEncoder  # Label encoder for transforming labels
+import numpy as np  # Numerical operations
+import pickle  # Saving and loading model objects
+import tkinter as tk  # GUI library
+
+# Tkinter additional imports for GUI components
+from tkinter import filedialog, Label, StringVar, OptionMenu, messagebox  
+from PIL import Image, ImageTk  # Image processing library
+import sys  # System-specific parameters and functions
+import io  # Core tools for working with streams
+import matplotlib.pyplot as plt  # Plotting library
+from collections import defaultdict  # For creating dictionaries of default values
+import random  # Random number generation
+import openpyxl  # Excel file handling
+import datetime  # Date and time handling
+import subprocess  # To run external scripts
+from collections import defaultdict  # For creating dictionaries of default values
+import webbrowser  # To open the default web browser
+
+
+
+# Set the encoding to UTF-8 (Handle Unicode)
+# Ensuring that all outputs handle UTF-8 encoding to support various characters
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# Directory paths
+# Define base paths for saving models and figures
+base_path = r"D:\WorkCodingTest\PlantProjcet"
+model_save_path = os.path.join(base_path, "models")
+figure_save_path = os.path.join(base_path, "analysis_figures")
+
+# Ensure directories exist
+# Create directories if they do not exist to avoid errors when saving files
+os.makedirs(model_save_path, exist_ok=True)
+os.makedirs(figure_save_path, exist_ok=True)
+
+
+# 2. Login Application Setup
+# Define a class for the login system GUI
+class LoginApp:
+    def __init__(self, root):
+        # Initialize the login window
+        self.root = root
+        self.root.title("Login System")
+        self.root.geometry("300x200")
+        
+        # Create and place labels and entries for username and password
+        # GUI components for user input
+        tk.Label(root, text="Username:").pack(pady=5)
+        self.username_entry = tk.Entry(root)
+        self.username_entry.pack(pady=5)
+
+        tk.Label(root, text="Password:").pack(pady=5)
+        self.password_entry = tk.Entry(root, show="*")
+        self.password_entry.pack(pady=5)
+
+        # Create and place the login button
+        # Button to trigger login function
+        login_button = tk.Button(root, text="Login", command=self.login)
+        login_button.pack(pady=20)
+    
+    def login(self):
+        # Get user input for username and password
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        
+        # Check if both fields are filled; replace with actual validation if needed
+        if username and password:
+            self.save_login_info(username)  # Save login info to file
+            messagebox.showinfo("Login Success", "You have successfully logged in.")
+            self.root.destroy()  # Close login window
+            main_root = tk.Tk()  # Create the main application window
+            MainApp(main_root)  # Initialize the main application
+            main_root.mainloop()
+        else:
+            messagebox.showwarning("Login Failed", "Please enter both username and password.")
+    
+    def save_login_info(self, username):
+        # Save the login information in an Excel file
+        file_path = os.path.join(base_path, "LoginDaily", "Members.xlsx")
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        try:
+            wb = openpyxl.load_workbook(file_path)
+            sheet = wb.active
+
+            next_row = sheet.max_row + 1  # Determine the next row to write
+
+            login_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Get current time
+
+            # Save the username, generated ID, and login time to the Excel sheet
+            sheet[f"A{next_row}"] = username
+            sheet[f"B{next_row}"] = next_row - 1  # Generating id based on row number
+            sheet[f"C{next_row}"] = login_time
+
+            wb.save(file_path)  # Save the Excel file
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save login info: {e}")
+
+
+# 3. Main Application GUI and Data Preparation
+# Define the main application class for plant disease detection
+class MainApp:
+    def __init__(self, root):
+        # Initialize the main window
+        self.root = root
+        self.root.title("Plant Disease Detection")
+        self.root.geometry("800x1000")
+        
+        # Print TensorFlow version for reference
+        print(f"TensorFlow Version: {tf.__version__}")
+
+        # Data Preparation
+        # Set the path to the dataset directory and initialize data generator with augmentations
+        base_path = os.path.abspath('plantvillage dataset')
+        self.color_path = os.path.join(base_path, 'color')
+
+        self.datagen = ImageDataGenerator(
+            rescale=1./255,
+            validation_split=0.2,
+            rotation_range=20,
+            width_shift_range=0.2,
+            height_shift_range=0.2,
+            shear_range=0.2,
+            zoom_range=0.2,
+            horizontal_flip=True,
+            fill_mode='nearest'
+        )
+
+        # Prepare data generators for training and validation
+        self.train_generator = self.datagen.flow_from_directory(
+            self.color_path,
+            target_size=(224, 224),
+            batch_size=32,
+            class_mode='categorical',
+            subset='training'
+        )
+
+        self.validation_generator = self.datagen.flow_from_directory(
+            self.color_path,
+            target_size=(224, 224),
+            batch_size=32,
+            class_mode='categorical',
+            subset='validation'
+        )
+
+        # Load the model for inference
+        self.model = load_model('best_model.keras')
+
+        # Load the label encoder
+        with open('label_transform.pkl', 'rb') as f:
+            self.label_encoder = pickle.load(f)
+
+        # Initialize variables for storing prediction and treatment information
+        self.current_prediction = {"class": None, "treatment_info": None}
+        self.treatment_database = {
+    "Apple___Apple_scab": {
+        "en": "Remove and destroy fallen leaves and fruit. Apply fungicides like captan, mancozeb, or thiophanate-methyl as needed.",
+        "ar": "إزالة وتدمير الأوراق والفواكه المتساقطة. تطبيق مبيدات الفطريات مثل الكابتان، المانكوزيب، أو الثيوفانات-ميثيل حسب الحاجة."
+    },
+    "Apple___Black_rot": {
+        "en": "Prune and remove dead or diseased wood. Use fungicides like thiophanate-methyl or captan during bloom.",
+        "ar": "تقليم وإزالة الخشب الميت أو المصاب. استخدام مبيدات الفطريات مثل الثيوفانات-ميثيل أو الكابتان خلال فترة الإزهار."
+    },
+    "Apple___Cedar_apple_rust": {
+        "en": "Apply myclobutanil or fenarimol fungicides. Remove galls from nearby juniper plants.",
+        "ar": "استخدام مبيدات الفطريات مثل الميكلوبوتانيل أو الفيناريمول. إزالة الأورام من نباتات العرعر القريبة."
+    },
+    "Apple___healthy": {
+        "en": "No treatment needed. Maintain good cultural practices.",
+        "ar": "لا حاجة للعلاج. الحفاظ على ممارسات ثقافية جيدة."
+    },
+    "Blueberry___healthy": {
+        "en": "No treatment needed. Maintain proper soil drainage and nutrition.",
+        "ar": "لا حاجة للعلاج. الحفاظ على تصريف التربة الجيد والتغذية المناسبة."
+    },
+    "Cherry_(including_sour)___Powdery_mildew": {
+        "en": "Apply sulfur or myclobutanil. Ensure good air circulation by pruning.",
+        "ar": "تطبيق الكبريت أو الميكلوبوتانيل. التأكد من تهوية جيدة من خلال التقليم."
+    },
+    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot": {
+        "en": "Use resistant hybrids. Apply fungicides like strobilurins as needed.",
+        "ar": "استخدام الأنواع الهجينة المقاومة. تطبيق مبيدات الفطريات مثل الستروبيلورينات حسب الحاجة."
+    },
+    "Corn_(maize)___Common_rust_": {
+        "en": "Use resistant hybrids. Apply fungicides like propiconazole if necessary.",
+        "ar": "استخدام الأنواع الهجينة المقاومة. تطبيق مبيدات الفطريات مثل البروبيكونازول إذا لزم الأمر."
+    },
+    "Corn_(maize)___Northern_Leaf_Blight": {
+        "en": "Rotate crops and use resistant hybrids. Apply fungicides like propiconazole.",
+        "ar": "تدوير المحاصيل واستخدام الأنواع الهجينة المقاومة. تطبيق مبيدات الفطريات مثل البروبيكونازول."
+    },
+    "Grape___Black_rot": {
+        "en": "Prune out and destroy infected plant parts. Apply fungicides like myclobutanil.",
+        "ar": "تقليم وإزالة الأجزاء النباتية المصابة. تطبيق مبيدات الفطريات مثل الميكلوبوتانيل."
+    },
+    "Grape___Esca_(Black_Measles)": {
+        "en": "Remove and burn infected wood. Use fungicides like benomyl if necessary.",
+        "ar": "إزالة وحرق الخشب المصاب. استخدام مبيدات الفطريات مثل البينوميل إذا لزم الأمر."
+    },
+    "Grape___healthy": {
+        "en": "No treatment needed. Maintain proper vineyard management.",
+        "ar": "لا حاجة للعلاج. الحفاظ على إدارة مزرعة العنب بشكل جيد."
+    },
+    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": {
+        "en": "Apply mancozeb or copper-based fungicides. Improve air circulation.",
+        "ar": "استخدام مبيدات الفطريات مثل المانكوزيب أو المبيدات القائمة على النحاس. تحسين تهوية الهواء."
+    },
+    "Orange___Haunglongbing_(Citrus_greening)": {
+        "en": "No cure. Remove infected trees and control psyllid population.",
+        "ar": "لا علاج. إزالة الأشجار المصابة والتحكم في تعداد الحشرات الناقلة."
+    },
+    "Peach___Bacterial_spot": {
+        "en": "Use copper-based bactericides. Avoid overhead irrigation.",
+        "ar": "استخدام المبيدات البكتيرية القائمة على النحاس. تجنب الري العلوي."
+    },
+    "Peach___healthy": {
+        "en": "No treatment needed. Maintain proper orchard management.",
+        "ar": "لا حاجة للعلاج. الحفاظ على إدارة بستان مناسبة."
+    },
+    "Pepper,_bell___Bacterial_spot": {
+        "en": "Apply copper-based bactericides. Use resistant varieties.",
+        "ar": "استخدام المبيدات البكتيرية القائمة على النحاس. استخدام الأنواع المقاومة."
+    },
+    "Pepper,_bell___healthy": {
+        "en": "No treatment needed. Maintain proper cultural practices.",
+        "ar": "لا حاجة للعلاج. الحفاظ على ممارسات ثقافية جيدة."
+    },
+    "Potato___Early_blight": {
+        "en": "Apply fungicides like chlorothalonil. Rotate crops and avoid overhead watering.",
+        "ar": "تطبيق مبيدات الفطريات مثل الكلوروثالونيل. تدوير المحاصيل وتجنب الري العلوي."
+    },
+    "Potato___healthy": {
+        "en": "No treatment needed. Maintain proper soil and plant health.",
+        "ar": "لا حاجة للعلاج. الحفاظ على صحة التربة والنبات."
+    },
+    "Potato___Late_blight": {
+        "en": "Remove and destroy infected plants. Use fungicides like chlorothalonil.",
+        "ar": "إزالة وتدمير النباتات المصابة. استخدام مبيدات الفطريات مثل الكلوروثالونيل."
+    },
+    "Raspberry___healthy": {
+        "en": "No treatment needed. Maintain proper pruning and sanitation.",
+        "ar": "لا حاجة للعلاج. الحفاظ على التقليم الجيد والصرف الصحي."
+    },
+    "Soybean___healthy": {
+        "en": "No treatment needed. Maintain good agronomic practices.",
+        "ar": "لا حاجة للعلاج. الحفاظ على ممارسات زراعية جيدة."
+    },
+    "Squash___Powdery_mildew": {
+        "en": "Apply sulfur or fungicides like trifloxystrobin. Ensure good air circulation.",
+        "ar": "تطبيق الكبريت أو مبيدات الفطريات مثل التريفلوكسيسوربين. التأكد من تهوية جيدة."
+    },
+    "Strawberry___healthy": {
+        "en": "No treatment needed. Maintain proper soil moisture and nutrition.",
+        "ar": "لا حاجة للعلاج. الحفاظ على رطوبة التربة والتغذية الجيدة."
+    },
+    "Strawberry___Leaf_scorch": {
+        "en": "Apply fungicides like myclobutanil. Remove infected leaves.",
+        "ar": "تطبيق مبيدات الفطريات مثل الميكلوبوتانيل. إزالة الأوراق المصابة."
+    },
+    "Tomato___Bacterial_spot": {
+        "en": "Use copper-based bactericides. Avoid overhead irrigation.",
+        "ar": "استخدام المبيدات البكتيرية القائمة على النحاس. تجنب الري العلوي."
+    },
+    "Tomato___Early_blight": {
+        "en": "Apply fungicides like chlorothalonil. Rotate crops.",
+        "ar": "تطبيق مبيدات الفطريات مثل الكلوروثالونيل. تدوير المحاصيل."
+    },
+    "Tomato___healthy": {
+        "en": "No treatment needed. Maintain proper cultural practices.",
+        "ar": "لا حاجة للعلاج. الحفاظ على ممارسات ثقافية جيدة."
+    },
+    "Tomato___Late_blight": {
+        "en": "Use fungicides like chlorothalonil. Remove and destroy infected plants.",
+        "ar": "استخدام مبيدات الفطريات مثل الكلوروثالونيل. إزالة وتدمير النباتات المصابة."
+    },
+    "Tomato___Leaf_Mold": {
+        "en": "Apply fungicides like chlorothalonil. Ensure good air circulation.",
+        "ar": "تطبيق مبيدات الفطريات مثل الكلوروثالونيل. التأكد من تهوية جيدة."
+    },
+    "Tomato___Septoria_leaf_spot": {
+        "en": "Apply fungicides like mancozeb. Remove infected leaves.",
+        "ar": "تطبيق مبيدات الفطريات مثل المانكوزيب. إزالة الأوراق المصابة."
+    },
+    "Tomato___Spider_mites Two-spotted_spider_mite": {
+        "en": "Use insecticidal soaps or oils. Introduce natural predators like ladybugs.",
+        "ar": "استخدام الصابون أو الزيوت الحشرية. إدخال المفترسات الطبيعية مثل الدعسوقيات."
+    },
+    "Tomato___Target_Spot": {
+        "en": "Apply fungicides like chlorothalonil. Remove infected leaves.",
+        "ar": "تطبيق مبيدات الفطريات مثل الكلوروثالونيل. إزالة الأوراق المصابة."
+    },
+    "Tomato___Tomato_mosaic_virus": {
+        "en": "No cure. Remove infected plants. Practice good sanitation.",
+        "ar": "لا يوجد علاج. إزالة النباتات المصابة. ممارسة الصرف الصحي الجيد."
+    },
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": {
+        "en": "No cure. Remove infected plants. Control whitefly vectors.",
+        "ar": "لا يوجد علاج. إزالة النباتات المصابة. التحكم في ناقلات الذبابة البيضاء."
+    },
+}
+
+        # GUI Setup
+        # Setup for language selection and display
+        self.language_var = StringVar(value="en")  # Default to English
+        languages = {"English": "en", "العربية": "ar"}
+        language_menu = OptionMenu(root, self.language_var, *languages.values())
+        language_menu.config(width=20)
+        language_label = Label(root, text="Select Language:")
+        language_label.pack(pady=5)
+        language_menu.pack(pady=5)
+        # Button to run the model summary Flask server
+        summary_button = tk.Button(root, text="Summary Model", command=self.show_model_summary)
+        summary_button.pack(pady=10)
+
+        # Placeholder for displaying images
+        self.panel = Label(root)
+        self.panel.pack(pady=10)
+
+        # Button to select an image for prediction
+        btn = tk.Button(root, text="Select Image", command=self.open_file)
+        btn.pack(pady=10)
+
+        # Labels for displaying prediction and treatment information
+        self.result_label = Label(root, text="Prediction will appear here.")
+        self.result_label.pack(pady=10)
+
+        self.treatment_label = Label(root, text="Treatment information will appear here.")
+        self.treatment_label.pack(pady=10)
+
+        # Button to run the analysis
+        # Button to initiate analysis functions
+        analysis_btn = tk.Button(root, text="Analysis", command=self.run_analysis, bg='white')
+        analysis_btn.pack(pady=10)
+
+        # Button for Developer Options
+        # Button for accessing developer-specific functionalities
+        developer_btn = tk.Button(root, text="Developer Options", command=self.developer_options, bg='white')
+        developer_btn.pack(pady=10)
+
+        # Horizontal Line Separator
+        # Separator for visual organization in the GUI
+        separator = tk.Frame(root, height=2, bd=1, relief=tk.SUNKEN)
+        separator.pack(fill=tk.X, padx=5, pady=20)
+
+        # Middle section: "History" label
+        # Label for history section
+        history_title_label = Label(root, text="History", font=("Arial", 14, "bold"))
+        history_title_label.pack()
+
+        # Bottom section: History details and healthy image after treatment
+        # Label and panel to display history and post-treatment images
+        self.history_label = Label(root, text="History: No information available.")
+        self.history_label.pack(pady=10)
+
+        self.healthy_image_panel = Label(root)
+        self.healthy_image_panel.pack(pady=10)
+
+        # Update treatment info based on language selection
+        self.language_var.trace("w", lambda *args: self.update_treatment_info())
+
+        # Initialize the analysis class
+        self.analysis = PlantDiseaseAnalysis(figure_save_path)
+
+    # 4. Image Prediction and Analysis Methods
+    def predict_image(self, img_path):
+        # Load and preprocess the image for prediction
+        img = image.load_img(img_path, target_size=(224, 224))
+        img_array = image.img_to_array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        img_array /= 255.0  # Rescale the image
+
+        # Predict the class of the image
+        predictions = self.model.predict(img_array)
+        predicted_class_idx = np.argmax(predictions, axis=1)
+        predicted_class_name = self.label_encoder.inverse_transform(predicted_class_idx)[0]
+
+        # Get treatment information based on the predicted class
+        treatment_info = self.treatment_database.get(predicted_class_name, {"en": "No treatment information available.", "ar": ".لا توجد معلومات عن العلاج"})
+
+        return predicted_class_name, treatment_info
+    
+
+    def show_model_summary(self):
+        # Run tempCodeRunnerFile.py as a separate script
+        subprocess.Popen(["python", "tempCodeRunnerFile.py"])
+        # Open the default web browser to the Flask server URL
+        webbrowser.open("http://127.0.0.1:5000")
+
+    def add_new_dataset(self):
+        # Function to add a new dataset and retrain the model
+        new_dataset_path = filedialog.askdirectory(title="Select New Dataset Directory")
+        if new_dataset_path:
+            self.train_generator = self.datagen.flow_from_directory(
+                new_dataset_path,
+                target_size=(224, 224),
+                batch_size=32,
+                class_mode='categorical',
+                subset='training'
+            )
+
+            self.validation_generator = self.datagen.flow_from_directory(
+                new_dataset_path,
+                target_size=(224, 224),
+                batch_size=32,
+                class_mode='categorical',
+                subset='validation'
+            )
+
+            # Ask if the user wants to train the model with the new dataset
+            if tk.messagebox.askyesno("Train Model", "Do you want to train the model with the new dataset?"):
+                self.train_model()
+
+    def train_model(self):
+        # Function to train the model with new data
+        proceed = tk.messagebox.askyesno(
+            "Warning", 
+            "Training the model will overwrite the existing trained model. Do you want to continue?"
+        )
+        
+        if not proceed:
+            return  # Exit the function if the user chooses not to proceed
+
+        # Compile the model with appropriate settings
+        self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5), 
+                        loss='categorical_crossentropy', 
+                        metrics=['accuracy'])
+
+        # Define callbacks for early stopping, checkpoint saving, and learning rate reduction
+        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(os.path.join(model_save_path, 'best_model.keras'), monitor='val_loss', save_best_only=True, mode='min')
+        lr_schedule = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=3, verbose=1)
+
+        # Train the model using the generators
+        history = self.model.fit(
+            self.train_generator,
+            validation_data=self.validation_generator,
+            epochs=100,
+            callbacks=[early_stopping, checkpoint, lr_schedule]
+        )
+
+        # Save the trained model and label encoder
+        self.model.save(os.path.join(model_save_path, 'plant_disease_model_color.keras'))
+
+        class_labels = list(self.train_generator.class_indices.keys())
+        self.label_encoder = LabelEncoder()
+        self.label_encoder.fit(class_labels)
+        with open(os.path.join(model_save_path, 'label_transform.pkl'), 'wb') as f:
+            pickle.dump(self.label_encoder, f)
+
+        # Notify user of completion
+        tk.messagebox.showinfo("Training Complete", "The model has been trained and saved successfully.")
+
+    def developer_options(self):
+        # Function to show developer options like adding new datasets and training the model
+        dev_window = tk.Toplevel(self.root)
+        dev_window.title("Developer Options")
+
+        # Buttons to add dataset and train model
+        tk.Button(dev_window, text="Add New Dataset", command=self.add_new_dataset).pack(pady=5)
+        tk.Button(dev_window, text="Train Model", command=self.train_model).pack(pady=5)
+
+        dev_window.mainloop()
+
+    def run_analysis(self):
+        # Function to open a window for selecting analysis options
+        analysis_window = tk.Toplevel(self.root)
+        analysis_window.title("Select Analysis")
+
+        # Create a dropdown for selecting plant type
+        plant_types = self.get_plant_types()  # Method to get all plant types
+        self.selected_plant_type = tk.StringVar(analysis_window)
+        self.selected_plant_type.set(plant_types[0])  # Set default value
+
+        tk.Label(analysis_window, text="Select Plant Type:").pack(pady=5)
+        plant_type_menu = tk.OptionMenu(analysis_window, self.selected_plant_type, *plant_types)
+        plant_type_menu.pack(pady=5)
+
+        # Button to show pie charts
+        tk.Button(analysis_window, text="Show Pie Chart", command=self.show_selected_pie_chart).pack(pady=20)
+
+        analysis_window.mainloop()
+
+    def get_plant_types(self):
+        # Method to extract all unique plant types from the directory names
+        image_dir = r"D:\WorkCodingTest\PlantProjcet\plantvillage dataset\color"
+        plant_types = []
+
+        # Collect all unique plant types based on directory names
+        for subdir in os.listdir(image_dir):
+            if os.path.isdir(os.path.join(image_dir, subdir)):
+                plant_type = subdir.split('___')[0]
+                if plant_type not in plant_types:
+                    plant_types.append(plant_type)
+        
+        return plant_types
+
+    def show_selected_pie_chart(self):
+        # Method to display pie chart for the selected plant type
+        selected_type = self.selected_plant_type.get()
+        print(f"Selected plant type: {selected_type}")  # Debug: print selected plant type
+        self.analysis.show_pie_charts(selected_type)
+
+    def update_treatment_info(self):
+        # Function to update treatment information based on user-selected language
+        selected_language = self.language_var.get()
+        if self.current_prediction["class"] is not None:
+            treatment_info = self.current_prediction["treatment_info"]
+            self.treatment_label.config(text=f"Treatment: {treatment_info[selected_language]}")
+
+    def get_history(self, predicted_class_name):
+        # Function to simulate history information for display
+        healthy_image_mapping = {
+            "Apple___Apple_scab": "Apple___healthy",
+            "Apple___Black_rot": "Apple___healthy",
+            "Apple___Cedar_apple_rust": "Apple___healthy",
+            "Blueberry___healthy": "Blueberry___healthy",
+            "Cherry_(including_sour)___Powdery_mildew": "Cherry_(including_sour)___healthy",
+            "Corn_(maize)___Cercospora_leaf_spot_Gray_leaf_spot": "Corn_(maize)___healthy",
+            "Corn_(maize)___Common_rust_": "Corn_(maize)___healthy",
+            "Corn_(maize)___Northern_Leaf_Blight": "Corn_(maize)___healthy",
+            "Grape___Black_rot": "Grape___healthy",
+            "Grape___Esca_(Black_Measles)": "Grape___healthy",
+            "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)": "Grape___healthy",
+            "Peach___Bacterial_spot": "Peach___healthy",
+            "Pepper,_bell___Bacterial_spot": "Pepper,_bell___healthy",
+            "Potato___Early_blight": "Potato___healthy",
+            "Potato___Late_blight": "Potato___healthy",
+            "Raspberry___healthy": "Raspberry___healthy",
+            "Soybean___healthy": "Soybean___healthy",
+            "Strawberry___Leaf_scorch": "Strawberry___healthy",
+            "Tomato___Bacterial_spot": "Tomato___healthy",
+            "Tomato___Early_blight": "Tomato___healthy",
+            "Tomato___Late_blight": "Tomato___healthy",
+            "Tomato___Leaf_Mold": "Tomato___healthy",
+            "Tomato___Septoria_leaf_spot": "Tomato___healthy",
+            "Tomato___Spider_mites_Two-spotted_spider_mite": "Tomato___healthy",
+            "Tomato___Target_Spot": "Tomato___healthy",
+            "Tomato___Tomato_mosaic_virus": "Tomato___healthy",
+            "Tomato___Tomato_Yellow_Leaf_Curl_Virus": "Tomato___healthy",
+        }
+
+        # Determine the healthy folder based on the predicted class name
+        healthy_folder_name = healthy_image_mapping.get(predicted_class_name, None)
+        if healthy_folder_name:
+            healthy_folder_path = os.path.join(self.color_path, healthy_folder_name)
+            healthy_images = os.listdir(healthy_folder_path)
+            if healthy_images:
+                # Select a random healthy image from the folder
+                selected_healthy_image = random.choice(healthy_images)
+                healthy_image_path = os.path.join(healthy_folder_path, selected_healthy_image)
+            else:
+                healthy_image_path = None
+        else:
+            healthy_image_path = None
+
+        # Simulate history information
+        history = {
+            "sick_date": "2023-08-15",
+            "healing_time": "2 weeks",
+            "healthy_image": healthy_image_path  # Use the randomly selected healthy image
+        }
+
+        return history
+
+    #7. Image Selection and Display
+
+     # Method to open and process file (existing code)
+    def open_file(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            # Load and resize the selected image
+            img = Image.open(file_path)
+            img = img.resize((224, 224), Image.ANTIALIAS)
+            img = ImageTk.PhotoImage(img)
+
+            # Display the selected image in the GUI
+            self.panel.configure(image=img)
+            self.panel.image = img
+
+            # Predict the class and get treatment information
+            predicted_class_name, treatment_info = self.predict_image(file_path)
+            self.current_prediction["class"] = predicted_class_name
+            self.current_prediction["treatment_info"] = treatment_info
+            selected_language = self.language_var.get()
+            self.result_label.config(text=f"Predicted class: {predicted_class_name}")
+            self.treatment_label.config(text=f"Treatment: {treatment_info[selected_language]}")
+
+            # Get and display the history
+            history_info = self.get_history(predicted_class_name)
+            self.history_label.config(text=f"History: Sick date: {history_info['sick_date']}, Healing time: {history_info['healing_time']}")
+
+            # Display the healthy image after treatment
+            if history_info["healthy_image"]:
+                healthy_img = Image.open(history_info["healthy_image"])
+                healthy_img = healthy_img.resize((224, 224), Image.ANTIALIAS)
+                healthy_img = ImageTk.PhotoImage(healthy_img)
+                self.healthy_image_panel.config(image=healthy_img)
+                self.healthy_image_panel.image = healthy_img
+            else:
+                self.healthy_image_panel.config(image=None)
+                self.healthy_image_panel.image = None
+
+
+# 5. Analysis Class and Methods
+class PlantDiseaseAnalysis:
+    def __init__(self, figure_save_path):
+        # Ensure the figure_save_path exists
+        if not os.path.exists(figure_save_path):
+            os.makedirs(figure_save_path)
+        self.figure_save_path = figure_save_path
+
+    def save_figure(self, fig, fig_name):
+        fig_path = os.path.join(self.figure_save_path, f'{fig_name}.png')
+        fig.savefig(fig_path)
+        print(f"Figure saved at {fig_path}")  # Debug: confirm figure saved
+
+    def load_and_display_figure(self, fig_name):
+        fig_path = os.path.join(self.figure_save_path, f'{fig_name}.png')
+        if os.path.exists(fig_path):
+            img = plt.imread(fig_path)
+            plt.imshow(img)
+            plt.axis('off')
+            plt.show()
+        else:
+            print(f"No figure found at {fig_path}")
+
+    def show_pie_charts(self, plant_type):
+        # Set the path to your image directory
+        image_dir = r"D:\WorkCodingTest\PlantProjcet\plantvillage dataset\color"
+        category_counts = defaultdict(lambda: defaultdict(int))
+
+        # Check if the directory exists
+        if not os.path.exists(image_dir):
+            print(f"Directory {image_dir} does not exist.")
+            return
+
+        print(f"Starting pie chart generation for plant type: {plant_type}")  # Debug
+
+        # Iterate through subdirectories in the directory
+        for subdir in os.listdir(image_dir):
+            subdir_path = os.path.join(image_dir, subdir)
+            
+            # Only process subdirectories matching the selected plant type
+            if os.path.isdir(subdir_path) and subdir.startswith(plant_type):
+                print(f"Processing directory: {subdir_path}")  # Debug
+
+                # Iterate through files in the subdirectory
+                for filename in os.listdir(subdir_path):
+                    print(f"Checking file: {filename} in {subdir}")  # Debug
+                    
+                    # Convert filename to lowercase before checking extension
+                    if filename.lower().endswith(('.jpg', '.jpeg')):  # Check for .jpg or .jpeg images
+                        try:
+                            _, disease = subdir.split('___')[:2]
+                            category_counts[plant_type][disease] += 1
+                            print(f"Counted {filename} under {plant_type} -> {disease}")  # Debug: confirm counting
+                        except ValueError as e:
+                            print(f"Directory name {subdir} is not in the expected format: {e}")
+                    else:
+                        print(f"Skipped file {filename} (not a .jpg or .jpeg image)")
+
+        # Check if any categories were counted
+        if not category_counts[plant_type]:
+            print(f"No images were processed for {plant_type}. Please check the directory and file extensions.")
+            return
+
+        print(f"Generating pie chart for plant type: {plant_type}")  # Debug
+
+        # Generate pie chart for the selected plant type
+        diseases = category_counts[plant_type]
+        labels = list(diseases.keys())
+        sizes = list(diseases.values())
+        fig_name = f'{plant_type}_pie_chart'
+        fig_path = os.path.join(self.figure_save_path, f'{fig_name}.png')
+
+        if os.path.exists(fig_path):
+            print(f"Loading existing figure {fig_name}")  # Debug
+            self.load_and_display_figure(fig_name)
+        else:
+            print(f"Creating new figure {fig_name}")  # Debug
+            fig, ax = plt.subplots(figsize=(10, 7))  # Customize figure size as needed
+            ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140)
+            ax.set_title(f'{plant_type} Disease Distribution')
+            self.save_figure(fig, fig_name)
+            plt.show()
+            print(f"Figure {fig_name} created and displayed.")  # Debug
+    
+
+# 6. Main Execution Block
+if __name__ == "__main__":
+    # Main execution block to start the login application
+    root = tk.Tk()
+    app = LoginApp(root)
+    root.mainloop()
+
+    # Initialize the PlantDiseaseAnalysis with the correct save path
+    analysis = PlantDiseaseAnalysis(r"D:\WorkCodingTest\PlantProjcet\analysis_figures")
+
